@@ -286,7 +286,7 @@ function render(){
       const isDone=!!(t.done&&t.done[key]);
       const el=document.createElement('div');el.className='task'+(isDone?' done':'');
       el.innerHTML=`<button class="ck" data-tg="${t.id}|${key}" aria-label="تحديد كمكتملة">${I.chk}</button>
-        <div class="info"><div class="t">${esc(t.title)}</div><div class="m"><span>${I.clock}${fmt(t)}</span><span>${I.bell}${SOUNDS[t.sound]?SOUNDS[t.sound].n:''}</span>${t.times>1?`<span>${I.loop}${t.times} مرات</span>`:''}</div></div>
+        <div class="info"><div class="t">${esc(t.title)}</div><div class="m"><span>${I.clock}${fmt(t)}</span><span>${I.bell}${esc(sd(t.sound).n)}</span>${t.times>1?`<span>${I.loop}${t.times} مرات</span>`:''}</div></div>
         <div class="acts"><button class="ib" data-ed="${t.id}" aria-label="تعديل">${I.edit}</button><button class="ib del" data-dl="${t.id}" aria-label="حذف">${I.del}</button></div>`;
       box.appendChild(el);
     });
@@ -307,10 +307,10 @@ $('#week').addEventListener('click',e=>{
 /* ---------- audio ---------- */
 let ac,cur;
 function play(name){
-  const S=SOUNDS[name]||SOUNDS.bell;
+  const S=sd(name);
   try{
     if(cur){cur.pause();cur=null}
-    if(S.u){cur=new Audio(S.u);cur.play().catch(()=>{});return}
+    if(S.u){cur=new Audio(S.u);const a=cur;a.play().catch(()=>{});if(!S.short)setTimeout(()=>{if(cur===a)a.pause()},30000);return}
     ac=ac||new (window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')ac.resume();
     let t=ac.currentTime+.02;
     (SOUNDS[name]||SOUNDS.bell).s.forEach(([f,d,type])=>{
@@ -362,7 +362,7 @@ function syncAll(){
 function summary(){
   const days=draft.repeat==='daily'?'كل الأيام':draft.days.slice().sort().map(i=>DAYS[i]).join('، ');
   $('#sum').innerHTML=`<div><span>المهمة</span><b>${esc(draft.title)}</b></div><div><span>الوقت</span><b>${fmt(draft)}</b></div>
-   <div><span>النغمة</span><b>${SOUNDS[draft.sound].n}</b></div><div><span>النمط</span><b>${REP[draft.repeat]}</b></div><div><span>الأيام</span><b>${days}</b></div>
+   <div><span>النغمة</span><b>${esc(sd(draft.sound).n)}</b></div><div><span>النمط</span><b>${REP[draft.repeat]}</b></div><div><span>الأيام</span><b>${days}</b></div>
    <div><span>التنبيه يومياً</span><b>${draft.times===1?'مرة واحدة':draft.times+' مرات، كل '+(draft.interval>=60?draft.interval/60+' ساعة':draft.interval+' دقيقة')}</b></div>`;
 }
 $('#sounds').addEventListener('click',e=>{
@@ -413,7 +413,7 @@ setInterval(()=>{
     for(let k=0;k<t.times;k++){
       if(h*60+m+k*t.interval!==mins)continue;
       const f=key+t.id+k;if(fired.has(f))continue;fired.add(f);
-      play(t.sound);if(!SOUNDS[t.sound].u||SOUNDS[t.sound].short)setTimeout(()=>play(t.sound),2600);
+      play(t.sound);if(!sd(t.sound).u||sd(t.sound).short)setTimeout(()=>play(t.sound),2600);
       toast('حان موعد: '+t.title);clearTimeout(tt);
     }
   });
@@ -527,6 +527,31 @@ $('#gBtn').onclick=async()=>{
   const pr=new firebase.auth.GoogleAuthProvider();
   try{await firebase.auth().signInWithPopup(pr)}catch(e){try{await firebase.auth().signInWithRedirect(pr)}catch(_){toast('تعذر تسجيل الدخول')}}
 };
+/* ---------- custom ringtones from device files ---------- */
+const CS={};let idb;
+const sd=k=>SOUNDS[k]||(CS[k]?{n:CS[k].n,u:CS[k].url}:SOUNDS.notif);
+const db=()=>idb||(idb=new Promise((ok,no)=>{const r=indexedDB.open('planner-sounds',1);r.onupgradeneeded=()=>r.result.createObjectStore('s',{keyPath:'id'});r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)}));
+const tx=(mode,fn)=>db().then(d=>new Promise((ok,no)=>{const t=d.transaction('s',mode),q=fn(t.objectStore('s'));t.oncomplete=()=>ok(q&&q.result);t.onerror=()=>no(t.error)}));
+async function csAdd(f){const id='c'+Date.now().toString(36),n=f.name.replace(/\.[^.]+$/,'').slice(0,40)||'نغمتي';await tx('readwrite',s=>s.put({id,n,blob:f}));CS[id]={n,url:URL.createObjectURL(f)};return id}
+async function csDel(id){await tx('readwrite',s=>s.delete(id));if(CS[id]){URL.revokeObjectURL(CS[id].url);delete CS[id]}}
+function snRow(k,n,del){return `<div class="snd" data-k="${k}" tabindex="0" role="radio"><span class="nm">${esc(n)}</span><button class="ib" data-pv="${k}" aria-label="معاينة">${I.play}</button>${del?`<button class="ib del" data-sd="${k}" aria-label="حذف النغمة">${I.del}</button>`:''}</div>`}
+function renderSounds(){
+  $('#sounds').innerHTML=Object.entries(CS).map(([k,v])=>snRow(k,v.n,1)).join('')+Object.entries(SOUNDS).map(([k,v])=>snRow(k,v.n)).join('')
+   +'<label class="btn ghost" style="margin:6px 0 0;justify-content:center;color:var(--text)"><svg viewBox="0 0 24 24"><path d="M12 15V4M7 9l5-5 5 5M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg> اختيار نغمة من ملفاتك<input type="file" accept="audio/*" id="csFile" hidden></label>';
+  document.querySelectorAll('.snd').forEach(e=>e.classList.toggle('sel',e.dataset.k===draft.sound));
+}
+$('#sounds').addEventListener('click',async e=>{
+  const b=e.target.closest('[data-sd]');if(!b)return;e.stopPropagation();
+  try{await csDel(b.dataset.sd)}catch(_){}
+  if(draft.sound===b.dataset.sd)draft.sound='notif';renderSounds();
+},true);
+$('#sounds').addEventListener('change',async e=>{
+  if(e.target.id!=='csFile')return;const f=e.target.files[0];e.target.value='';if(!f)return;
+  if(!/^audio\//.test(f.type)&&!/\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i.test(f.name)){toast('اختر ملفاً صوتياً');return}
+  if(f.size>8e6){toast('الملف كبير، الحد الأقصى 8 ميغابايت');return}
+  try{draft.sound=await csAdd(f);renderSounds();play(draft.sound)}catch(_){toast('تعذر حفظ النغمة في هذا المتصفح')}
+});
+(async()=>{try{const all=await tx('readonly',s=>s.getAll());(all||[]).forEach(x=>{CS[x.id]={n:x.n,url:URL.createObjectURL(x.blob)}})}catch(_){}renderSounds();render()})();
 cloudInit();
 render();
 if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
